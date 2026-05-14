@@ -18,6 +18,7 @@ current_time = 0
 timer_type = "work"
 is_top = False
 drag_item = None
+timer_id = None  # 新增：用来保存定时器句柄
 
 def load_data():
     global data
@@ -72,27 +73,36 @@ def check_time_input(val):
         return False
 
 def start_pomodoro():
-    global running, current_time, timer_type
+    global running, current_time, timer_type, timer_id
     if running:
         return
     if not check_time_input(work_entry.get()) or not check_time_input(rest_entry.get()):
         messagebox.showerror("输入错误", "时长必须是 1~120 的整数！")
         return
+
+    # 如果当前时间为0，说明是第一次开始，才重新设置
+    if current_time <= 0:
+        timer_type = "work"
+        current_time = int(work_entry.get()) * 60
+
+    # 清除旧定时器
+    if timer_id is not None:
+        root.after_cancel(timer_id)
+        timer_id = None
+
     running = True
-    timer_type = "work"
-    current_time = int(work_entry.get()) * 60
     update_timer_status_ui()
     update_timer()
 
 def update_timer():
-    global running, current_time, timer_type
+    global running, current_time, timer_type, timer_id
     if not running:
         return
     mins, secs = divmod(current_time, 60)
     timer_label.config(text=f"{mins:02d}:{secs:02d}")
     if current_time > 0:
         current_time -= 1
-        root.after(1000, update_timer)
+        timer_id = root.after(1000, update_timer)
     else:
         play_beep()
         if timer_type == "work":
@@ -115,12 +125,19 @@ def update_timer():
             update_timer()
 
 def stop_timer():
-    global running
+    global running, timer_id
     running = False
+    if timer_id is not None:
+        root.after_cancel(timer_id)
+        timer_id = None
 
 def reset_timer():
-    global running, current_time, timer_type
+    global running, current_time, timer_type, timer_id
     running = False
+    if timer_id is not None:
+        root.after_cancel(timer_id)
+        timer_id = None
+    current_time = 0
     timer_label.config(text="00:00", fg="#888888")
     timer_type = "work"
     status_label.config(text="准备就绪", fg="#666666" if data.get("theme")=="light" else "#cccccc")
@@ -166,15 +183,11 @@ def refresh_todo_list():
     todo_list.delete(*todo_list.get_children())
     sorted_todos = data["todos"]
     
-    # 基础优先级颜色
-    todo_list.tag_configure("high", foreground="#e74c3c")    # 高：红
-    todo_list.tag_configure("mid", foreground="#f39c12")     # 中：橙
-    todo_list.tag_configure("low", foreground="#888888")     # 低：灰
-    # 已完成：加划线
+    todo_list.tag_configure("high", foreground="#e74c3c")
+    todo_list.tag_configure("mid", foreground="#f39c12")
+    todo_list.tag_configure("low", foreground="#888888")
     todo_list.tag_configure("done", font=("微软雅黑", 9, "overstrike"))
-    # 超时：文字变浅，保留优先级颜色
-    todo_list.tag_configure("overdue", foreground="#999999") # 浅灰
-    
+    todo_list.tag_configure("overdue", foreground="#999999")
     todo_list.tag_configure("row_white", background="white")
     todo_list.tag_configure("row_blue", background="#f0f8ff")
     now_day = date.today()
@@ -187,7 +200,6 @@ def refresh_todo_list():
         create_time = todo.get("create_time", "")
         deadline = todo.get("deadline", "")
         
-        # 先绑定优先级标签
         base_tag = ""
         if level == "高":
             base_tag = "high"
@@ -196,7 +208,6 @@ def refresh_todo_list():
         else:
             base_tag = "low"
         
-        # 组装标签：基础优先级 + 已完成划线 + 超时浅化
         all_tags = (base_tag,)
         if is_done:
             all_tags += ("done",)
@@ -208,7 +219,6 @@ def refresh_todo_list():
             except:
                 pass
         
-        # 行背景色
         row_tag = "row_white" if idx % 2 == 0 else "row_blue"
         all_tags += (row_tag,)
 
@@ -238,11 +248,9 @@ def check_expire_todo():
         pass
 
 def get_max_day(y, m):
-    """获取某年某月最大天数"""
     if m in [4,6,9,11]:
         return 30
     if m == 2:
-        # 闰年判断
         if (y % 400 == 0) or (y % 4 == 0 and y % 100 != 0):
             return 29
         else:
@@ -290,7 +298,6 @@ def choose_deadline(default_date=""):
         if d_var.get() > max_d:
             d_var.set(max_d)
 
-    # 年月变化自动刷新天数上限
     y_var.trace_add("write", update_day_limit)
     m_var.trace_add("write", update_day_limit)
 
@@ -299,7 +306,6 @@ def choose_deadline(default_date=""):
             y = y_var.get()
             m = m_var.get()
             d = d_var.get()
-            # 二次校验日期合法性
             date(y, m, d)
             res["date"] = f"{y}-{m:02d}-{d:02d}"
         except:
@@ -343,10 +349,8 @@ def double_click_todo(event):
     selected = todo_list.selection()
     if not selected:
         return
-    # 获取选中行的索引
     item_id = selected[0]
     idx = todo_list.index(item_id)
-    # 直接用索引修改状态
     data["todos"][idx]["done"] = not data["todos"][idx].get("done", False)
     save_data()
     refresh_todo_list()
@@ -357,7 +361,7 @@ def edit_todo():
         messagebox.showwarning("提示", "请先选择任务")
         return
     item_id = selected[0]
-    idx = todo_list.index(item_id)  # 用索引定位，100%稳定
+    idx = todo_list.index(item_id)
     todo = data["todos"][idx]
 
     old_content = todo["content"]
@@ -484,12 +488,10 @@ left_frame.place(x=30, y=60, width=420, height=580)
 right_frame = tk.Frame(root, bg="#e8f0fe", bd=2, relief="groove")
 right_frame.place(x=480, y=60, width=440, height=580)
 
-# 初始灰色准备就绪
 tk.Label(left_frame, text="🍅 番茄专注计时器", font=("微软雅黑",15,"bold"), bg="#e8f0fe").pack(pady=8)
 status_label = tk.Label(left_frame, text="准备就绪", font=("微软雅黑",13,"bold"), bg="#e8f0fe", fg="#666666")
 status_label.pack(pady=5)
 
-# 时长输入框
 tk.Label(left_frame, text="专注时长", bg="#e8f0fe").pack(pady=2)
 work_entry = tk.Entry(left_frame, width=15, font=12)
 work_entry.insert(0, "25")
@@ -515,7 +517,6 @@ tk.Button(theme_frame, text="深色主题", command=set_dark_theme, width=10).gr
 
 tk.Button(left_frame, text="查看统计图表", command=show_statistics, bg="#3498db", fg="white", width=14).pack(pady=8)
 
-# 右侧待办
 tk.Label(right_frame, text="输入待办任务", bg="#e8f0fe", font=("微软雅黑",10)).pack(pady=2)
 todo_input = tk.Entry(right_frame, width=24, font=11)
 todo_input.pack(pady=5)
@@ -527,7 +528,6 @@ level_combo.set("中")
 level_combo.configure(takefocus=False)
 level_combo.pack(pady=3)
 
-# 新增操作提示文字
 tk.Label(right_frame, text="单击选中变蓝可拖拽 | 双击快速标记完成/取消", 
          bg="#e8f0fe", font=("微软雅黑",9), fg="#666666").pack(pady=2)
 
@@ -564,7 +564,6 @@ todo_list.pack(pady=8)
 refresh_todo_list()
 check_expire_todo()
 
-# 强制焦点锁定左侧输入框
 root.after(100, lambda: work_entry.focus_force())
 
 def on_close():
